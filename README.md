@@ -1,13 +1,13 @@
 # docear-mm-to-org
 
-Script to convert [Docear](https://www.docear.org) mindmap files to org-mode. Created with GitHub copilot. It should work with [Freeplane](https://docs.freeplane.org/) files too. Created with GitHub copilot.
+Script to convert [Docear](https://www.docear.org) mindmap files to org-mode. Created with GitHub copilot. It should work with [Freeplane](https://docs.freeplane.org/) files too. Created almost exclusively with GitHub copilot.
 
 The conversion keeps the root node as the Org file title, then renders each
 subsequent branch as nested org headings. Selected node metadata is preserved:
-- node LINK values are rewritten to a pdf:// link. The location of the pdf files is hard-coded (TODO)
-- if a node has a pdf_annotation with page="N", the pdf link is rewritten as
-  pdf://...::N to match org-pdftools style
-- node attribute NAME="key" is included as an Org citation with the format [cite:key]
+- node `LINK` values are rewritten to a `pdf:// link`. The location of the mindmap root and the pdf files can be specified on the command line.
+- if a node has a `pdf_annotation` with `page="N"`, the pdf link is rewritten as
+  `pdf://...::N` to match [`org-pdftools`](https://github.com/fuxialexander/org-pdftools) conventions
+- node attribute `NAME="key"` is included as an Org citation with the format `[cite:key]`
 
 ## Usage
 
@@ -36,5 +36,3 @@ python docear_mm_to_org.py MindMap.mm \
 - `--project-root`: optional base directory used to resolve `project://...` links from the Docear map
 - `--pdf-root`: base root for the generated `pdf://...` links in the Org file
 - `-o`: output path for the generated Org file
-
-This keeps the map structure, preserves citation keys, and creates Org PDF links that work with `org-pdftools` conventions.
