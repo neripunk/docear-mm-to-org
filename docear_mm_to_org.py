@@ -5,13 +5,14 @@ The conversion keeps the root node as the Org file title, then renders each
 subsequent branch as nested org headings. Selected node metadata is preserved:
 - node LINK values are rewritten from project://... to pdf://~/...
 - node attribute NAME="key" is emitted as an Org citation like [cite:key]
+- these values are placed as body text under the heading rather than attached to
+  the heading text itself
 """
 
 from __future__ import annotations
 
 import argparse
 import html
-import re
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -90,26 +91,26 @@ def format_citation(node: ET.Element) -> str:
 
 def format_org_heading(node: ET.Element, depth: int) -> str:
     title = extract_node_text(node)
-    attrs = extract_attrs(node)
+    return f"{'*' * depth} {title}".strip()
 
-    suffix = []
+
+def format_body_lines(node: ET.Element) -> list[str]:
+    lines: list[str] = []
     link = convert_project_link(node.get("LINK"))
     if link:
-        suffix.append(f"[[{link}]]")
+        lines.append(f"  [[{link}]]")
+
     cite = format_citation(node)
     if cite:
-        suffix.append(cite)
+        lines.append(f"  {cite}")
 
-    if suffix:
-        heading = f"{'*' * depth} {title} {' '.join(suffix)}"
-    else:
-        heading = f"{'*' * depth} {title}"
-    return heading.strip()
+    return lines
 
 
 def walk_nodes(node: ET.Element, depth: int = 1) -> list[str]:
     lines: list[str] = []
     lines.append(format_org_heading(node, depth))
+    lines.extend(format_body_lines(node))
     for child in node:
         if child.tag == "node":
             lines.extend(walk_nodes(child, depth + 1))
