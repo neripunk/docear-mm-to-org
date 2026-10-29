@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import argparse
 import html
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
 import xml.etree.ElementTree as ET
 
 
@@ -63,36 +64,82 @@ def pdf_page_from_node(node: ET.Element) -> str | None:
     return None
 
 
-def convert_project_link(raw_link: str | None) -> str | None:
-    """Convert project://... URIs into pdf://~/... URIs.
+def project_relative_parts(raw_link: str) -> list[str]:
+    """Extract the relative path carried by a project:// URI.
 
     Example:
       project://16AA.../../../../articulos/pedagogy/Foo.pdf
-      -> pdf://~/articulos/pedagogy/Foo.pdf
+      -> ["articulos", "pedagogy", "Foo.pdf"]
+    """
+    rest = raw_link[len("project://") :]
+    if not rest:
+        return []
+
+    # drop the UUID/id segment if present
+    if "/" in rest:
+        _, _, remainder = rest.partition("/")
+    else:
+        remainder = ""
+
+    parts = []
+    for piece in (remainder or "").split("/"):
+        if not piece or piece == ".":
+            continue
+        if piece == "..":
+            # We intentionally drop leading relative navigation because the
+            # goal is to convert to a stable document path relative to the(pdf)
+            # root, not to preserve filesystem traversal in the output.
+            continue
+        parts.append(piece)
+
+    return parts
+
+
+def convert_project_link(raw_link: str | None, project_root: str | None = None, pdf_root: str = "~/") -> str | None:
+    """Convert project://... URIs into a portable pdf:// URI.
+
+    The function resolves the project link to a filesystem path when a project
+    root is given, then emits a relative path under the configured Org PDF root.
     """
     if not raw_link:
         return None
 
     if raw_link.startswith("project://"):
-        rest = raw_link[len("project://") :]
-        if "/" not in rest:
-            return "pdf://~/"
+        rel_parts = project_relative_parts(raw_link)
+        if not rel_parts:
+            return None
 
-        parts = rest.split("/")
-        if len(parts) >= 2:
-            tail = parts[1:]
-            while tail and tail[0] in (".", ".."):
-                tail.pop(0)
-            if tail:
-                return "pdf://~/" + "/".join(tail)
-        return "pdf://~/"
+        rel_path = PurePosixPath(*rel_parts)
+        if project_root:
+            # Optional validation: resolve the actual file path for debugging or
+            # downstream consumers while still exporting a portable relative path.
+            _ = (Path(project_root) / Path(*rel_path.parts)).resolve()
 
+        # Build a portable pdf:// link relative to the configured pdf root.
+        pdf_root = pdf_root.strip() or "~/"
+        uri_base = ""
+        if pdf_root.startswith("~/"):
+            uri_base = "pdf://" + pdf_root.rstrip("/")
+        elif pdf_root.startswith("~"):
+            uri_base = "pdf://~" + pdf_root[1:].rstrip("/")
+        elif pdf_root.startswith("/"):
+            uri_base = "pdf://" + pdf_root.rstrip("/")
+        else:
+            uri_base = "pdf://~/" + pdf_root.strip("/")
+
+        rel_text = rel_path.as_posix().lstrip("/")
+        return f"{uri_base}/{rel_text}"
+
+    if raw_link.startswith("pdf://"):
+        return raw_link
+
+    # Non-project links are kept as-is.
     return raw_link
 
 
-def format_pdf_link(node: ET.Element) -> str | None:
+def format_pdf_link(node: ET.Element, project_root: str | None = None, pdf_root: str = "~/") -> str | None:
     raw_link = node.get("LINK")
-    link = convert_project_link(raw_link)
+    link = convert_project_link(raw_link, project_root=project_root, pdf_root=pdf_root)
     if not link:
         return None
 
@@ -117,9 +164,9 @@ def format_org_heading(node: ET.Element, depth: int) -> str:
     return f"{'*' * depth} {title}".strip()
 
 
-def format_body_lines(node: ET.Element) -> list[str]:
+def format_body_lines(node: ET.Element, project_root: str | None = None, pdf_root: str = "~/") -> list[str]:
     lines: list[str] = []
-    pdf_link = format_pdf_link(node)
+    pdf_link = format_pdf_link(node, project_root=project_root, pdf_root=pdf_root)
     if pdf_link:
         lines.append(f"  {pdf_link}")
 
@@ -130,17 +177,17 @@ def format_body_lines(node: ET.Element) -> list[str]:
     return lines
 
 
-def walk_nodes(node: ET.Element, depth: int = 1) -> list[str]:
+def walk_nodes(node: ET.Element, depth: int = 1, project_root: str | None = None, pdf_root: str = "~/") -> list[str]:
     lines: list[str] = []
     lines.append(format_org_heading(node, depth))
-    lines.extend(format_body_lines(node))
+    lines.extend(format_body_lines(node, project_root=project_root, pdf_root=pdf_root))
     for child in node:
         if child.tag == "node":
-            lines.extend(walk_nodes(child, depth + 1))
+            lines.extend(walk_nodes(child, depth + 1, project_root=project_root, pdf_root=pdf_root))
     return lines
 
 
-def parse_map(mm_path: Path) -> tuple[str, list[str]]:
+def parse_map(mm_path: Path, project_root: str | None = None, pdf_root: str = "~/") -> tuple[str, list[str]]:
     tree = ET.parse(mm_path)
     root = tree.getroot()
 
@@ -157,19 +204,27 @@ def parse_map(mm_path: Path) -> tuple[str, list[str]]:
     children = []
     for child in root_node:
         if child.tag == "node":
-            children.extend(walk_nodes(child, depth=1))
+            children.extend(walk_nodes(child, depth=1, project_root=project_root, pdf_root=pdf_root))
 
     return title, children
 
 
-def convert_file(input_path: Path, output_path: Path | None = None) -> Path:
-    title, lines = parse_map(input_path)
+def convert_file(input_path: Path, output_path: Path | None = None, project_root: str | None = None, pdf_root: str = "~/") -> Path:
+    title, lines = parse_map(input_path, project_root=project_root, pdf_root=pdf_root)
 
     org_lines = [f"#+TITLE: {title}"]
     org_lines.extend(lines)
     out = output_path or input_path.with_suffix(".org")
     out.write_text("\n".join(org_lines) + "\n", encoding="utf-8")
     return out
+
+
+def _default_project_root() -> str | None:
+    return os.environ.get("DOCEAR_PROJECT_ROOT") or None
+
+
+def _default_pdf_root() -> str:
+    return os.environ.get("ORG_PDF_ROOT") or "~/"
 
 
 def main() -> int:
@@ -183,9 +238,21 @@ def main() -> int:
         type=Path,
         help="Path for the output .org file (defaults to the input stem with .org)",
     )
+    parser.add_argument(
+        "--project-root",
+        type=str,
+        default=_default_project_root(),
+        help="Base directory used to interpret project:// links. Optional but useful for portability.",
+    )
+    parser.add_argument(
+        "--pdf-root",
+        type=str,
+        default=_default_pdf_root(),
+        help="Org PDF base root used in output links, e.g. ~/ or ~/pdfs.",
+    )
     args = parser.parse_args()
 
-    output = convert_file(args.input, args.output)
+    output = convert_file(args.input, args.output, project_root=args.project_root, pdf_root=args.pdf_root)
     print(f"Wrote {output}")
     return 0
 
