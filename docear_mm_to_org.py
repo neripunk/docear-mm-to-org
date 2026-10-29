@@ -4,6 +4,8 @@
 The conversion keeps the root node as the Org file title, then renders each
 subsequent branch as nested org headings. Selected node metadata is preserved:
 - node LINK values are rewritten from project://... to pdf://~/...
+- if a node has a pdf_annotation with page="N", the pdf link is rewritten as
+  pdf://...::N to match org-pdftools style
 - node attribute NAME="key" is emitted as an Org citation like [cite:key]
 - these values are placed as body text under the heading rather than attached to
   the heading text itself
@@ -52,6 +54,15 @@ def extract_attrs(node: ET.Element) -> dict[str, str]:
     return attrs
 
 
+def pdf_page_from_node(node: ET.Element) -> str | None:
+    for child in node:
+        if child.tag == "pdf_annotation":
+            page = child.get("page")
+            if page is not None and page.strip():
+                return page.strip()
+    return None
+
+
 def convert_project_link(raw_link: str | None) -> str | None:
     """Convert project://... URIs into pdf://~/... URIs.
 
@@ -79,6 +90,18 @@ def convert_project_link(raw_link: str | None) -> str | None:
     return raw_link
 
 
+def format_pdf_link(node: ET.Element) -> str | None:
+    raw_link = node.get("LINK")
+    link = convert_project_link(raw_link)
+    if not link:
+        return None
+
+    page = pdf_page_from_node(node)
+    if page is not None:
+        return f"[[{link}::{page}]]"
+    return f"[[{link}]]"
+
+
 def format_citation(node: ET.Element) -> str:
     attrs = extract_attrs(node)
     key = attrs.get("key")
@@ -96,9 +119,9 @@ def format_org_heading(node: ET.Element, depth: int) -> str:
 
 def format_body_lines(node: ET.Element) -> list[str]:
     lines: list[str] = []
-    link = convert_project_link(node.get("LINK"))
-    if link:
-        lines.append(f"  [[{link}]]")
+    pdf_link = format_pdf_link(node)
+    if pdf_link:
+        lines.append(f"  {pdf_link}")
 
     cite = format_citation(node)
     if cite:
