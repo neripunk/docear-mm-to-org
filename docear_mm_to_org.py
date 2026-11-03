@@ -6,9 +6,8 @@ subsequent branch as nested org headings. Selected node metadata is preserved:
 - node LINK values are rewritten from project://... to pdf://~/...
 - if a node has a pdf_annotation with page="N", the pdf link is rewritten as
   pdf://...::N to match org-pdftools style
-- node attribute NAME="key" is emitted as an Org citation like [cite:key]
-- these values are placed as body text under the heading rather than attached to
-  the heading text itself
+- node attribute NAME="key" is emitted before node text as [cite:@key]
+- a node's PDF link is emitted after its text on the same heading
 """
 
 from __future__ import annotations
@@ -156,31 +155,28 @@ def format_citation(node: ET.Element) -> str:
         key = node.get("KEY")
     if not key:
         return ""
-    return f"[cite:{key}]"
+    cite_key = key if key.startswith("@") else f"@{key}"
+    return f"[cite:{cite_key}]"
 
 
-def format_org_heading(node: ET.Element, depth: int) -> str:
+def format_org_heading(
+    node: ET.Element,
+    depth: int,
+    project_root: str | None = None,
+    pdf_root: str = "~/",
+) -> str:
     title = extract_node_text(node)
-    return f"{'*' * depth} {title}".strip()
-
-
-def format_body_lines(node: ET.Element, project_root: str | None = None, pdf_root: str = "~/") -> list[str]:
-    lines: list[str] = []
-    pdf_link = format_pdf_link(node, project_root=project_root, pdf_root=pdf_root)
-    if pdf_link:
-        lines.append(f"  {pdf_link}")
-
-    cite = format_citation(node)
-    if cite:
-        lines.append(f"  {cite}")
-
-    return lines
+    parts = [part for part in (
+        format_citation(node),
+        title,
+        format_pdf_link(node, project_root=project_root, pdf_root=pdf_root),
+    ) if part]
+    return f"{'*' * depth} {' '.join(parts)}".strip()
 
 
 def walk_nodes(node: ET.Element, depth: int = 1, project_root: str | None = None, pdf_root: str = "~/") -> list[str]:
     lines: list[str] = []
-    lines.append(format_org_heading(node, depth))
-    lines.extend(format_body_lines(node, project_root=project_root, pdf_root=pdf_root))
+    lines.append(format_org_heading(node, depth, project_root=project_root, pdf_root=pdf_root))
     for child in node:
         if child.tag == "node":
             lines.extend(walk_nodes(child, depth + 1, project_root=project_root, pdf_root=pdf_root))
