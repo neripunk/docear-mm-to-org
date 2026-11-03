@@ -8,6 +8,7 @@ subsequent branch as nested org headings. Selected node metadata is preserved:
   pdf://...::N to match org-pdftools style
 - node attribute NAME="key" is emitted before node text as [cite:@key]
 - a node's PDF link is emitted after its text on the same heading
+- node IDs and arrowlink destinations are converted to Org ID links
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import html
 import os
+import re
 from pathlib import Path, PurePosixPath
 import xml.etree.ElementTree as ET
 
@@ -148,6 +150,52 @@ def format_pdf_link(node: ET.Element, project_root: str | None = None, pdf_root:
     return f"[[{link}]]"
 
 
+def org_id_from_node_id(node_id: str) -> str:
+    """Make a readable Org ID from a source node ID."""
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", node_id.strip()).strip("-")
+    return f"docear-{safe_id or 'node'}"
+
+
+def build_node_id_map(root_node: ET.Element) -> dict[str, str]:
+    """Map source IDs for emitted headings to unique Org IDs.
+
+    The root node is the document title rather than an Org heading, so it is
+    intentionally not included as a link target.
+    """
+    node_ids: dict[str, str] = {}
+    used_org_ids: set[str] = set()
+
+    def visit(node: ET.Element, is_root: bool = False) -> None:
+        source_id = node.get("ID")
+        if source_id and not is_root and source_id not in node_ids:
+            base_id = org_id_from_node_id(source_id)
+            org_id = base_id
+            suffix = 2
+            while org_id in used_org_ids:
+                org_id = f"{base_id}-{suffix}"
+                suffix += 1
+            node_ids[source_id] = org_id
+            used_org_ids.add(org_id)
+
+        for child in node:
+            if child.tag == "node":
+                visit(child)
+
+    visit(root_node, is_root=True)
+    return node_ids
+
+
+def format_internal_links(node: ET.Element, node_ids: dict[str, str]) -> str | None:
+    links = []
+    for child in node:
+        if child.tag == "arrowlink":
+            destination = child.get("DESTINATION")
+            org_id = node_ids.get(destination) if destination else None
+            if org_id:
+                links.append(f"[[id:{org_id}]]")
+    return " ".join(links) or None
+
+
 def format_citation(node: ET.Element) -> str:
     attrs = extract_attrs(node)
     key = attrs.get("key")
@@ -164,22 +212,45 @@ def format_org_heading(
     depth: int,
     project_root: str | None = None,
     pdf_root: str = "~/",
+    node_ids: dict[str, str] | None = None,
 ) -> str:
     title = extract_node_text(node)
     parts = [part for part in (
         format_citation(node),
         title,
         format_pdf_link(node, project_root=project_root, pdf_root=pdf_root),
+        format_internal_links(node, node_ids or {}),
     ) if part]
     return f"{'*' * depth} {' '.join(parts)}".strip()
 
 
-def walk_nodes(node: ET.Element, depth: int = 1, project_root: str | None = None, pdf_root: str = "~/") -> list[str]:
-    lines: list[str] = []
-    lines.append(format_org_heading(node, depth, project_root=project_root, pdf_root=pdf_root))
+def walk_nodes(
+    node: ET.Element,
+    depth: int = 1,
+    project_root: str | None = None,
+    pdf_root: str = "~/",
+    node_ids: dict[str, str] | None = None,
+) -> list[str]:
+    lines = [format_org_heading(
+        node,
+        depth,
+        project_root=project_root,
+        pdf_root=pdf_root,
+        node_ids=node_ids,
+    )]
+    org_id = (node_ids or {}).get(node.get("ID", ""))
+    if org_id:
+        lines.extend([":PROPERTIES:", f":ID: {org_id}", ":END:"])
+
     for child in node:
         if child.tag == "node":
-            lines.extend(walk_nodes(child, depth + 1, project_root=project_root, pdf_root=pdf_root))
+            lines.extend(walk_nodes(
+                child,
+                depth + 1,
+                project_root=project_root,
+                pdf_root=pdf_root,
+                node_ids=node_ids,
+            ))
     return lines
 
 
@@ -197,10 +268,17 @@ def parse_map(mm_path: Path, project_root: str | None = None, pdf_root: str = "~
         raise ValueError(f"No root node found in {mm_path}")
 
     title = extract_node_text(root_node)
+    node_ids = build_node_id_map(root_node)
     children = []
     for child in root_node:
         if child.tag == "node":
-            children.extend(walk_nodes(child, depth=1, project_root=project_root, pdf_root=pdf_root))
+            children.extend(walk_nodes(
+                child,
+                depth=1,
+                project_root=project_root,
+                pdf_root=pdf_root,
+                node_ids=node_ids,
+            ))
 
     return title, children
 
@@ -225,7 +303,7 @@ def _default_pdf_root() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Convert a Docear/Freeplane .mm file to an Org-mode file."
+        description="Convert a Docear/Freeplane .mm map to an Org-mode file."
     )
     parser.add_argument("input", type=Path, help="Path to the Docear/Freeplane .mm file")
     parser.add_argument(
