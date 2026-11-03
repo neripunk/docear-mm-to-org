@@ -8,6 +8,11 @@ subsequent branch as nested org headings. Selected node metadata is preserved:
 - if a node has a `pdf_annotation` with `page="N"`, the pdf link is rewritten as
   `pdf://...::N` to match [`org-pdftools`](https://github.com/fuxialexander/org-pdftools) conventions
 - node attribute `NAME="key"` is included as an Org citation with the format `[cite:key]`
+- node `ID` values are added to headings as Org `:ID:` properties, and `arrowlink DESTINATION` references are emitted as `[[id:...]]` links
+
+The root node remains the document title rather than a heading, so it does not
+receive an Org `:ID:` property. Arrowlinks to nodes without an emitted heading
+(such as the root) are omitted.
 
 ## Usage
 
@@ -23,7 +28,7 @@ This writes:
 MindMap.org
 ```
 
-The root node becomes the Org title, and each nested node becomes a heading. For nodes with a `LINK` pointing to a PDF, the exporter rewrites the link into a portable Org PDF link format.
+The root node becomes the Org title, and each nested node becomes a heading. For nodes with a `LINK` pointing to a PDF, the exporter rewrites the link into a portable Org PDF link format. Internal `arrowlink` references use the destination node's Org ID.
 
 Optional arguments:
 ```bash
